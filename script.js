@@ -6,6 +6,7 @@ const downloadBtn = document.getElementById('download');
 const container = document.querySelector('.container');
 
 let pdfFiles = [];
+let isDraggingInternalPdf = false;
 
 // Detect mobile devices
 function isMobileDevice() {
@@ -47,6 +48,7 @@ deleteZone.innerHTML = '<div class="delete-zone-content"><span class="material-s
 document.body.appendChild(deleteZone);
 
 async function renderFileList() {
+    console.log('Rendering file list. Total PDFs:', pdfFiles.length);
     fileList.innerHTML = '';
     
     // Create grid container
@@ -60,6 +62,8 @@ async function renderFileList() {
         item.className = 'grid-item';
         item.draggable = true;
         item.dataset.idx = idx;
+        item.dataset.fileId = file._uniqueId || 'no-id';
+        item.dataset.fileName = file.name;
         
         // Create preview container
         const previewContainer = document.createElement('div');
@@ -74,7 +78,13 @@ async function renderFileList() {
         fileName.title = file.name;
         fileName.textContent = file.name.length > 15 ? file.name.substring(0, 12) + '...' : file.name;
         
+        const removeBtn = document.createElement('button');
+        removeBtn.className = 'remove-btn';
+        removeBtn.title = 'Remove';
+        removeBtn.innerHTML = '<span class="material-symbols-rounded">close</span>';
+        
         fileInfo.appendChild(fileName);
+        fileInfo.appendChild(removeBtn);
         
         // Add preview and file info to item
         item.appendChild(previewContainer);
@@ -90,6 +100,9 @@ async function renderFileList() {
             let touchStarted = false;
             
             item.addEventListener('touchstart', (e) => {
+                // Don't trigger long press on remove button
+                if (e.target.closest('.remove-btn')) return;
+                
                 touchStarted = true;
                 item.classList.add('touch-active');
                 
@@ -161,21 +174,191 @@ async function renderFileList() {
         
         // Drag events
         item.addEventListener('dragstart', (e) => {
+            isDraggingInternalPdf = true;
             item.classList.add('dragging');
             e.dataTransfer.effectAllowed = 'move';
             e.dataTransfer.setData('text/plain', idx);
-            e.dataTransfer.setData('application/pdf-item', idx);
+            e.dataTransfer.setData('application/pdf-item', 'true');
+            e.dataTransfer.setData('text/pdf-index', idx.toString());
             
             // Show delete zone when dragging PDF items
             deleteZone.classList.add('show');
         });
         
         item.addEventListener('dragend', () => {
+            isDraggingInternalPdf = false;
             item.classList.remove('dragging');
             // Hide delete zone when drag ends
             deleteZone.classList.remove('show');
             deleteZone.classList.remove('dragover');
         });
+        
+        // Touch-based drag and drop for mobile
+        if (isMobileDevice()) {
+            let touchItem = null;
+            let touchOffset = { x: 0, y: 0 };
+            let placeholder = null;
+            let isDragging = false;
+            
+            // Create a draggable clone for touch
+            item.addEventListener('touchstart', (e) => {
+                // Don't interfere with long press for delete
+                if (touchStarted) return;
+                
+                // Don't start drag if touching the remove button
+                if (e.target.closest('.remove-btn')) return;
+                
+                const touch = e.touches[0];
+                const rect = item.getBoundingClientRect();
+                
+                // Store offset
+                touchOffset.x = touch.clientX - rect.left;
+                touchOffset.y = touch.clientY - rect.top;
+                
+                // Create clone after a short delay to distinguish from scroll
+                setTimeout(() => {
+                    if (e.touches.length === 1) {
+                        isDragging = true;
+                        
+                        // Create clone
+                        touchItem = item.cloneNode(true);
+                        touchItem.className = 'grid-item touch-dragging';
+                        touchItem.style.position = 'fixed';
+                        touchItem.style.width = rect.width + 'px';
+                        touchItem.style.zIndex = '1000';
+                        touchItem.style.pointerEvents = 'none';
+                        
+                        // Position clone at touch point
+                        touchItem.style.left = (touch.clientX - touchOffset.x) + 'px';
+                        touchItem.style.top = (touch.clientY - touchOffset.y) + 'px';
+                        
+                        document.body.appendChild(touchItem);
+                        
+                        // Add placeholder
+                        item.classList.add('dragging-placeholder');
+                        
+                        // Show delete zone
+                        deleteZone.classList.add('show');
+                        
+                        // Haptic feedback
+                        if (navigator.vibrate) {
+                            navigator.vibrate(20);
+                        }
+                    }
+                }, 150); // 150ms delay to distinguish from scrolling
+            });
+            
+            item.addEventListener('touchmove', (e) => {
+                if (!isDragging || !touchItem) return;
+                
+                e.preventDefault(); // Prevent scrolling while dragging
+                const touch = e.touches[0];
+                
+                // Update clone position
+                touchItem.style.left = (touch.clientX - touchOffset.x) + 'px';
+                touchItem.style.top = (touch.clientY - touchOffset.y) + 'px';
+                
+                // Find element under touch point
+                const elementBelow = document.elementFromPoint(touch.clientX, touch.clientY);
+                
+                // Check if over delete zone
+                if (elementBelow && (elementBelow.classList.contains('delete-zone') || 
+                    elementBelow.closest('.delete-zone'))) {
+                    deleteZone.classList.add('dragover');
+                } else {
+                    deleteZone.classList.remove('dragover');
+                    
+                    // Find grid item under touch
+                    const gridItemBelow = elementBelow?.closest('.grid-item');
+                    
+                    if (gridItemBelow && gridItemBelow !== item && 
+                        gridItemBelow.parentElement === gridContainer) {
+                        // Get all items
+                        const items = [...gridContainer.children];
+                        const draggedIndex = items.indexOf(item);
+                        const targetIndex = items.indexOf(gridItemBelow);
+                        
+                        if (draggedIndex !== targetIndex) {
+                            // Rearrange items
+                            if (draggedIndex < targetIndex) {
+                                gridItemBelow.after(item);
+                            } else {
+                                gridItemBelow.before(item);
+                            }
+                        }
+                    }
+                }
+            });
+            
+            item.addEventListener('touchend', (e) => {
+                if (!isDragging || !touchItem) return;
+                
+                const touch = e.changedTouches[0];
+                const elementBelow = document.elementFromPoint(touch.clientX, touch.clientY);
+                
+                // Check if dropped on delete zone
+                if (elementBelow && (elementBelow.classList.contains('delete-zone') || 
+                    elementBelow.closest('.delete-zone'))) {
+                    // Delete the PDF
+                    // Remove touch item
+                    touchItem.remove();
+                    
+                    // Animate deletion
+                    item.style.transition = 'all 0.3s cubic-bezier(0.4, 0, 0.2, 1)';
+                    item.style.opacity = '0';
+                    item.style.transform = 'scale(0.5) rotate(10deg)';
+                    
+                    setTimeout(() => {
+                        // Remove by unique ID
+                        if (file._uniqueId) {
+                            pdfFiles = pdfFiles.filter(f => f._uniqueId !== file._uniqueId);
+                        } else {
+                            const currentIdx = parseInt(item.dataset.idx);
+                            pdfFiles.splice(currentIdx, 1);
+                        }
+                        renderFileList();
+                    }, 300);
+                } else {
+                    // Get final order and update array
+                    const items = [...gridContainer.children];
+                    const newOrder = [];
+                    
+                    // Build new order based on DOM position
+                    items.forEach(el => {
+                        const originalIdx = parseInt(el.dataset.idx);
+                        if (!isNaN(originalIdx) && pdfFiles[originalIdx]) {
+                            newOrder.push(pdfFiles[originalIdx]);
+                        }
+                    });
+                    
+                    // Update the array with new order
+                    pdfFiles = newOrder;
+                    
+                    // Clean up
+                    item.classList.remove('dragging-placeholder');
+                    if (touchItem) touchItem.remove();
+                    
+                    // Re-render to update indices
+                    renderFileList();
+                }
+                
+                // Clean up
+                isDragging = false;
+                touchItem = null;
+                deleteZone.classList.remove('show');
+                deleteZone.classList.remove('dragover');
+            });
+            
+            item.addEventListener('touchcancel', () => {
+                // Clean up on cancel
+                if (touchItem) touchItem.remove();
+                item.classList.remove('dragging-placeholder');
+                isDragging = false;
+                touchItem = null;
+                deleteZone.classList.remove('show');
+                deleteZone.classList.remove('dragover');
+            });
+        }
         
         item.addEventListener('dragover', (e) => {
             e.preventDefault();
@@ -204,9 +387,49 @@ async function renderFileList() {
                 pdfFiles.splice(toIdx, 0, movedFile);
                 renderFileList();
             }
+            
+            // Ensure flag is reset
+            isDraggingInternalPdf = false;
         });
         
 
+        
+        // Remove button click handler
+        removeBtn.addEventListener('click', (e) => {
+            e.stopPropagation(); // Prevent triggering other events
+            e.preventDefault();
+            
+            console.log('Remove button clicked for:', file.name, 'ID:', file._uniqueId);
+            
+            // Animate removal
+            item.style.transition = 'all 0.3s cubic-bezier(0.4, 0, 0.2, 1)';
+            item.style.opacity = '0';
+            item.style.transform = 'scale(0.8) rotate(5deg)';
+            
+            setTimeout(() => {
+                // Remove by unique ID for most reliable removal
+                const beforeCount = pdfFiles.length;
+                
+                if (file._uniqueId) {
+                    // Remove by unique ID
+                    pdfFiles = pdfFiles.filter(f => f._uniqueId !== file._uniqueId);
+                } else {
+                    // Fallback to removing by reference
+                    const fileIndex = pdfFiles.indexOf(file);
+                    if (fileIndex > -1) {
+                        pdfFiles.splice(fileIndex, 1);
+                    }
+                }
+                
+                console.log(`Removed PDF. Before: ${beforeCount}, After: ${pdfFiles.length}`);
+                renderFileList();
+            }, 300);
+        });
+        
+        // Prevent default touch behavior on remove button
+        removeBtn.addEventListener('touchstart', (e) => {
+            e.stopPropagation();
+        });
         
         gridContainer.appendChild(item);
         
@@ -223,6 +446,12 @@ async function renderFileList() {
         dropArea.classList.add('hidden');
         addMoreBtn.style.display = '';
         addMoreBtn.innerHTML = '<span class="material-symbols-rounded">add_circle</span> Add More PDFs';
+        
+        // Show mobile hint for first time users
+        if (isMobileDevice() && pdfFiles.length === 2 && !localStorage.getItem('mobileHintShown')) {
+            showMobileHint();
+            localStorage.setItem('mobileHintShown', 'true');
+        }
     } else {
         dropArea.classList.remove('hidden');
         addMoreBtn.style.display = 'none';
@@ -233,6 +462,8 @@ function handleFiles(files) {
     let newFilesAdded = false;
     for (const file of files) {
         if (file.type === 'application/pdf') {
+            // Add a unique ID to each file for tracking
+            file._uniqueId = Date.now() + '_' + Math.random().toString(36).substr(2, 9);
             pdfFiles.push(file);
             newFilesAdded = true;
         }
@@ -273,7 +504,9 @@ let dragCounter = 0;
 container.addEventListener('dragenter', (e) => {
     e.preventDefault();
     dragCounter++;
-    if (pdfFiles.length > 0 && dragCounter === 1) {
+    
+    // Only show overlay for external files, not when rearranging PDFs
+    if (pdfFiles.length > 0 && dragCounter === 1 && !isDraggingInternalPdf) {
         container.classList.add('dragover');
         dragOverlay.classList.add('show');
     }
@@ -281,7 +514,7 @@ container.addEventListener('dragenter', (e) => {
 
 container.addEventListener('dragleave', (e) => {
     dragCounter--;
-    if (dragCounter === 0) {
+    if (dragCounter === 0 && !isDraggingInternalPdf) {
         container.classList.remove('dragover');
         dragOverlay.classList.remove('show');
     }
@@ -289,7 +522,11 @@ container.addEventListener('dragleave', (e) => {
 
 container.addEventListener('dragover', (e) => {
     e.preventDefault();
-    e.dataTransfer.dropEffect = 'copy';
+    
+    // Only set copy effect for external files
+    if (!isDraggingInternalPdf) {
+        e.dataTransfer.dropEffect = 'copy';
+    }
 });
 
 container.addEventListener('drop', (e) => {
@@ -297,7 +534,9 @@ container.addEventListener('drop', (e) => {
     dragCounter = 0;
     container.classList.remove('dragover');
     dragOverlay.classList.remove('show');
-    if (pdfFiles.length > 0) {
+    
+    // Only handle external files, not PDF items being rearranged
+    if (pdfFiles.length > 0 && !isDraggingInternalPdf && e.dataTransfer.files.length > 0) {
         handleFiles(e.dataTransfer.files);
     }
 });
@@ -443,6 +682,33 @@ async function mergePDFs(files) {
     return await mergedPdf.save();
 }
 
+// Show mobile hint for drag and drop
+function showMobileHint() {
+    const hint = document.createElement('div');
+    hint.className = 'mobile-hint';
+    hint.innerHTML = `
+        <div class="mobile-hint-content">
+            <span class="material-symbols-rounded">touch_app</span>
+            <p>Touch and drag PDFs to reorder them</p>
+        </div>
+    `;
+    
+    document.body.appendChild(hint);
+    
+    // Animate in
+    setTimeout(() => {
+        hint.classList.add('show');
+    }, 100);
+    
+    // Auto hide after 4 seconds
+    setTimeout(() => {
+        hint.classList.remove('show');
+        setTimeout(() => {
+            document.body.removeChild(hint);
+        }, 300);
+    }, 4000);
+}
+
 // Mobile delete confirmation function
 function showMobileDeleteConfirm(index, itemElement) {
     // Create mobile delete modal
@@ -493,7 +759,13 @@ function showMobileDeleteConfirm(index, itemElement) {
         itemElement.style.transform = 'scale(0.5) rotate(10deg)';
         
         setTimeout(() => {
-            pdfFiles.splice(index, 1);
+            // Remove by unique ID if available
+            const file = pdfFiles[index];
+            if (file && file._uniqueId) {
+                pdfFiles = pdfFiles.filter(f => f._uniqueId !== file._uniqueId);
+            } else {
+                pdfFiles.splice(index, 1);
+            }
             renderFileList();
         }, 300);
     });
@@ -524,13 +796,15 @@ deleteZone.addEventListener('dragleave', (e) => {
 
 deleteZone.addEventListener('drop', (e) => {
     e.preventDefault();
-    const pdfIndex = e.dataTransfer.getData('application/pdf-item');
+    const isPdfItem = e.dataTransfer.getData('application/pdf-item');
+    const pdfIndex = e.dataTransfer.getData('text/pdf-index');
     
-    if (pdfIndex !== '' && pdfFiles[pdfIndex]) {
-        console.log('Deleting PDF:', pdfFiles[pdfIndex].name);
+    if (isPdfItem && pdfIndex !== '' && pdfFiles[parseInt(pdfIndex)]) {
+        const index = parseInt(pdfIndex);
+        console.log('Deleting PDF:', pdfFiles[index].name);
         
         // Remove the PDF from array
-        pdfFiles.splice(parseInt(pdfIndex), 1);
+        pdfFiles.splice(index, 1);
         
         // Hide delete zone
         deleteZone.classList.remove('show');
