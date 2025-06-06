@@ -7,6 +7,13 @@ const container = document.querySelector('.container');
 
 let pdfFiles = [];
 
+// Detect mobile devices
+function isMobileDevice() {
+    return /Android|webOS|iPhone|iPad|iPod|BlackBerry|IEMobile|Opera Mini/i.test(navigator.userAgent) || 
+           ('ontouchstart' in window) || 
+           (navigator.maxTouchPoints > 0);
+}
+
 // Create floating particles
 function createParticles() {
     const particlesContainer = document.createElement('div');
@@ -76,6 +83,56 @@ async function renderFileList() {
         // Add with animation
         item.style.opacity = '0';
         item.style.transform = 'translateY(20px) scale(0.9)';
+        
+        // Mobile touch events for delete
+        if (isMobileDevice()) {
+            let touchTimer;
+            let touchStarted = false;
+            
+            item.addEventListener('touchstart', (e) => {
+                touchStarted = true;
+                item.classList.add('touch-active');
+                
+                // Start long press timer
+                touchTimer = setTimeout(() => {
+                    if (touchStarted) {
+                        // Haptic feedback if available
+                        if (navigator.vibrate) {
+                            navigator.vibrate(50);
+                        }
+                        
+                        // Show delete confirmation
+                        showMobileDeleteConfirm(idx, item);
+                    }
+                }, 800); // 800ms long press
+            });
+            
+            item.addEventListener('touchmove', (e) => {
+                // Cancel long press if finger moves too much
+                const touch = e.touches[0];
+                const rect = item.getBoundingClientRect();
+                const x = touch.clientX - rect.left;
+                const y = touch.clientY - rect.top;
+                
+                if (x < -20 || x > rect.width + 20 || y < -20 || y > rect.height + 20) {
+                    clearTimeout(touchTimer);
+                    touchStarted = false;
+                    item.classList.remove('touch-active');
+                }
+            });
+            
+            item.addEventListener('touchend', () => {
+                clearTimeout(touchTimer);
+                touchStarted = false;
+                item.classList.remove('touch-active');
+            });
+            
+            item.addEventListener('touchcancel', () => {
+                clearTimeout(touchTimer);
+                touchStarted = false;
+                item.classList.remove('touch-active');
+            });
+        }
         
         // Generate PDF preview
         try {
@@ -384,6 +441,72 @@ async function mergePDFs(files) {
     }
     
     return await mergedPdf.save();
+}
+
+// Mobile delete confirmation function
+function showMobileDeleteConfirm(index, itemElement) {
+    // Create mobile delete modal
+    const modal = document.createElement('div');
+    modal.className = 'mobile-delete-modal';
+    modal.innerHTML = `
+        <div class="mobile-delete-content">
+            <div class="mobile-delete-icon">
+                <span class="material-symbols-rounded">delete</span>
+            </div>
+            <h3>Delete PDF?</h3>
+            <p>Are you sure you want to remove "${pdfFiles[index].name}"?</p>
+            <div class="mobile-delete-buttons">
+                <button class="mobile-cancel-btn">Cancel</button>
+                <button class="mobile-delete-btn">Delete</button>
+            </div>
+        </div>
+    `;
+    
+    document.body.appendChild(modal);
+    
+    // Animate in
+    setTimeout(() => {
+        modal.classList.add('show');
+    }, 10);
+    
+    // Handle buttons
+    const cancelBtn = modal.querySelector('.mobile-cancel-btn');
+    const deleteBtn = modal.querySelector('.mobile-delete-btn');
+    
+    cancelBtn.addEventListener('click', () => {
+        modal.classList.remove('show');
+        setTimeout(() => {
+            document.body.removeChild(modal);
+        }, 300);
+    });
+    
+    deleteBtn.addEventListener('click', () => {
+        // Animate out modal
+        modal.classList.remove('show');
+        setTimeout(() => {
+            document.body.removeChild(modal);
+        }, 300);
+        
+        // Delete the PDF with animation
+        itemElement.style.transition = 'all 0.3s cubic-bezier(0.4, 0, 0.2, 1)';
+        itemElement.style.opacity = '0';
+        itemElement.style.transform = 'scale(0.5) rotate(10deg)';
+        
+        setTimeout(() => {
+            pdfFiles.splice(index, 1);
+            renderFileList();
+        }, 300);
+    });
+    
+    // Close on backdrop click
+    modal.addEventListener('click', (e) => {
+        if (e.target === modal) {
+            modal.classList.remove('show');
+            setTimeout(() => {
+                document.body.removeChild(modal);
+            }, 300);
+        }
+    });
 }
 
 // Delete zone drag and drop handlers
